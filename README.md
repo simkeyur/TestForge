@@ -1,5 +1,5 @@
 # TestForge
-AI Enabled Test Data Generator
+AI Enabled Test Data Generator - [Link](https://simkeyur.github.io/TestForge/)
 
 TestForge is a lightweight web app built with **Vanilla JavaScript** and **Bootstrap** to generate realistic test data using **Gemini AI** (Google's LLM).
 
