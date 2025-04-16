@@ -54,21 +54,29 @@
   <div class="container mt-4">
     <h3 class="mb-4"><i class="bi bi-layout-text-window-reverse me-1"></i> Generate Test Data</h3>
     <div id="ollamaConfig" class="border rounded p-3 mb-4 bg-dark d-none">
-      <div class="row g-2 align-items-center">
-        <div class="col-md-6">
+      <div class="row g-2 align-items-end">
+        <div class="col-md-5">
           <label class="form-label">Ollama Model</label>
           <select class="form-select" id="ollamaModelSelect">
             <option selected disabled>Loading models...</option>
           </select>
         </div>
-        <div class="col-md-6">
+        <div class="col-md-5">
           <label class="form-label">Ollama API URL</label>
           <input type="text" id="ollamaUrl" class="form-control"
-                 placeholder="e.g. http://localhost:11434"
-                 value="http://localhost:11434" />
+              oninput="localStorage.setItem('ollama_url', this.value)"
+              placeholder="e.g. http://localhost:11434 or ngrok url"
+              value="http://localhost:11434" />
+
+        </div>
+        <div class="col-md-2">
+          <button class="btn btn-outline-info w-100 mt-3" onclick="loadOllamaModels()">
+            <i class="bi bi-arrow-clockwise me-1"></i> Refresh
+          </button>
         </div>
       </div>
     </div>
+    
     
     <div class="mb-3">
       <button class="btn btn-outline-light dropdown-toggle" type="button" id="templateDropdown" data-bs-toggle="dropdown" aria-expanded="false">
@@ -205,6 +213,19 @@
 
   <script>
     document.addEventListener("DOMContentLoaded", () => {
+      // Restore saved Ollama URL if available
+      const savedUrl = localStorage.getItem("ollama_url");
+      if (savedUrl) {
+        document.getElementById("ollamaUrl").value = savedUrl;
+      }
+
+      // Restore toggle state
+      const ollamaUsedLast = localStorage.getItem("use_ollama") === "true";
+      document.getElementById("useOllamaToggle").checked = ollamaUsedLast;
+      toggleLLM(); // apply UI changes
+    });
+
+    document.addEventListener("DOMContentLoaded", () => {
       if (document.getElementById("useOllamaToggle")?.checked) {
         toggleLLM();
       }
@@ -277,7 +298,7 @@
 
       const rowCount = parseInt(document.getElementById("rowCount").value) || 10;
       const prompt = `Generate ${rowCount} rows of realistic test data based on this schema: ${JSON.stringify(schema)}. Return only a JSON array.`;
-
+      const ollama_prompt = `Generate ${rowCount} rows of realistic test data based on this schema: ${JSON.stringify(schema)}. Return only a JSON array. Do not include explanations, markdown, or code fences.`;
       const loader = document.getElementById("loader");
       loader.innerHTML = `
         <div class="spinner-border text-light" role="status">
@@ -292,13 +313,37 @@
         let response, text;
 
         if (isOllama) {
-          response = await fetch("${ollamaUrl}/api/generate", {
+          const ollamaUrl = document.getElementById("ollamaUrl")?.value?.trim();
+          //console.log(ollama_prompt);
+          response = await fetch(`${ollamaUrl}/api/generate`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ model, prompt, stream: false })
+            body: JSON.stringify({ model, ollama_prompt, stream: false })
           });
-          const result = await response.json();
-          text = result.response;
+
+          const rawText = await response.text();
+          //console.log(rawText);
+          let parsed = "";
+
+          try {
+            const json = JSON.parse(rawText);
+            parsed = json.response;
+          } catch (e) {
+            throw new Error("Ollama returned invalid or empty JSON.");
+          }
+
+          if (parsed.startsWith("```")) {
+            parsed = parsed.replace(/^```(?:json)?/, '').replace(/```$/, '').trim();
+          }
+
+          // Strip intro like "Here is your data:"
+          if (parsed.includes("[{")) {
+            parsed = parsed.slice(parsed.indexOf("[{"));
+          }
+
+
+
+          text = parsed;
         } else {
           response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`, {
             method: "POST",
@@ -475,6 +520,8 @@
     async function toggleLLM() {
       const useOllama = document.getElementById("useOllamaToggle")?.checked;
 
+      localStorage.setItem("use_ollama", useOllama);
+
       document.getElementById("apiKeyContainer")?.classList.toggle("d-none", useOllama);
       document.getElementById("generateGeminiBtn")?.classList.toggle("d-none", useOllama);
       document.getElementById("generateOllamaBtn")?.classList.toggle("d-none", !useOllama);
@@ -483,14 +530,17 @@
       if (useOllama) loadOllamaModels();
     }
 
+
+
     // Load Ollama models from local API
     async function loadOllamaModels() {
       const url = document.getElementById("ollamaUrl")?.value?.trim();
-      if (!url) return;
+      if (!url) return alert("Please enter a valid Ollama API URL.");
 
       try {
         const res = await fetch(`${url}/api/tags`);
         const data = await res.json();
+
         const select = document.getElementById("ollamaModelSelect");
         select.innerHTML = "";
         data.models.forEach(m => {
@@ -500,9 +550,9 @@
           select.appendChild(opt);
         });
       } catch (err) {
-        alert("⚠️ Could not fetch Ollama models. Please check your API URL.");
+        alert("⚠️ Could not fetch models. Check URL or CORS settings.");
       }
-}
+    }
 
   </script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
