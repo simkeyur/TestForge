@@ -39,11 +39,24 @@
   <nav class="navbar navbar-expand-lg navbar-dark bg-black">
     <div class="container-fluid">
       <a class="navbar-brand" href="#"><i class="bi bi-tools me-2"></i> TestForge</a>
-      <div class="ms-auto">
-        <i class="bi bi-moon-fill theme-switch fs-4" id="themeToggle" title="Toggle Theme"></i>
+      <div class="ms-auto d-flex gap-3 align-items-center">
+  
+        <!-- LLM Toggle -->
+        <div class="form-check form-switch text-light">
+          <input class="form-check-input" type="checkbox" id="useOllamaToggle" onchange="toggleLLM()">
+          <label class="form-check-label" for="useOllamaToggle">Use Ollama</label>
+        </div>
+  
+        <!-- Ollama Model Select -->
+        <select class="form-select form-select-sm w-auto d-none" id="ollamaModelSelect" title="Select Ollama model">
+          <option selected disabled>Loading models...</option>
+        </select>
+  
+
       </div>
     </div>
   </nav>
+  
 
   <div class="container mt-4">
     <h3 class="mb-4"><i class="bi bi-layout-text-window-reverse me-1"></i> Generate Test Data</h3>
@@ -75,7 +88,7 @@
       <input type="number" id="rowCount" class="form-control" value="10" max="10000" />
     </div>
 
-    <div class="mb-4 row g-2 align-items-center">
+    <div id="generateGeminiBtn" class="mb-4 row g-2 align-items-center">
       <div class="col-md-9">
         <input type="password" id="geminiKey" class="form-control" placeholder="Enter Gemini API Key" />
       </div>
@@ -87,6 +100,12 @@
         <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com/app/apikey</a>.
       </div>
     </div>
+    <div class="mb-4" id="generateButtons">
+      <button id="generateOllamaBtn" class="btn btn-secondary w-100 d-none" onclick="generateData(event, 'ollama')">
+        <i class="bi bi-cpu me-1"></i> Generate with Ollama
+      </button>
+    </div>
+
     
 
     <div id="loader">
@@ -175,6 +194,12 @@
 
 
   <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      if (document.getElementById("useOllamaToggle")?.checked) {
+        toggleLLM();
+      }
+    });
+
     const themeToggle = document.getElementById("themeToggle");
     themeToggle.addEventListener("click", () => {
       const html = document.documentElement;
@@ -224,10 +249,15 @@
       input.placeholder = selectEl.value === "Smart" ? "Add your Prompt" : "Length / Regex / Values";
     }
 
-    async function generateData(event) {
+    async function generateData(event, mode = 'gemini') {
       event.preventDefault();
-      const apiKey = document.getElementById("geminiKey").value.trim();
-      if (!apiKey) return alert("Please enter your Gemini API Key.");
+
+      const isOllama = mode === 'ollama';
+      const key = document.getElementById("geminiKey")?.value.trim();
+      const model = document.getElementById("ollamaModelSelect")?.value;
+
+      if (!isOllama && !key) return alert("Please enter your Gemini API key.");
+      if (isOllama && !model) return alert("Please select an Ollama model.");
 
       const rows = document.querySelectorAll(".schema-card");
       if (rows.length === 0) return alert("Please add at least one schema column.");
@@ -238,36 +268,55 @@
         const smartPrompt = isSmart ? inputs[2].value.trim() : null;
         return {
           name: inputs[0].value,
-          type: isSmart ? (smartPrompt || `Infer data type based on column name: '${inputs[0].value}'`) : inputs[1].value,
+          type: isSmart ? (smartPrompt || `Infer data for column: '${inputs[0].value}'`) : inputs[1].value,
           options: inputs[2].value
         };
       });
 
-      const rowCount = parseInt(document.getElementById("rowCount").value);
-      const prompt = `Generate ${rowCount} rows of realistic test data based on this schema: ${JSON.stringify(schema)}. Return only a JSON array. Do not include markdown.`;
+      const rowCount = parseInt(document.getElementById("rowCount").value) || 10;
+      const prompt = `Generate ${rowCount} rows of realistic test data based on this schema: ${JSON.stringify(schema)}. Return only a JSON array.`;
 
-      document.getElementById("loader").style.display = "block";
+      const loader = document.getElementById("loader");
+      loader.innerHTML = `
+        <div class="spinner-border text-light" role="status">
+          <span class="visually-hidden">Loading...</span>
+        </div>
+        <div>Generating data using ${isOllama ? 'Ollama' : 'Gemini'}...</div>
+      `;
+      loader.style.display = "block";
       document.getElementById("output").textContent = "";
 
       try {
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-        });
+        let response, text;
 
-        const result = await response.json();
-        let jsonText = result.candidates[0].content.parts[0].text.trim();
-        if (jsonText.startsWith("```")) {
-          jsonText = jsonText.replace(/^```(?:json)?/, '').replace(/```$/, '').trim();
+        if (isOllama) {
+          response = await fetch("http://localhost:11434/api/generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model, prompt, stream: false })
+          });
+          const result = await response.json();
+          text = result.response;
+        } else {
+          response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+          });
+          const data = await response.json();
+          text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
         }
 
-        window.generatedData = JSON.parse(jsonText);
+        if (text.startsWith("```")) {
+          text = text.replace(/^```(?:json)?/, '').replace(/```$/, '').trim();
+        }
+
+        window.generatedData = JSON.parse(text);
         document.getElementById("output").textContent = JSON.stringify(window.generatedData, null, 2);
       } catch (err) {
-        document.getElementById("output").textContent = "❌ Error generating or parsing data: " + err.message;
+        document.getElementById("output").textContent = "❌ Error: " + err.message;
       } finally {
-        document.getElementById("loader").style.display = "none";
+        loader.style.display = "none";
       }
     }
 
@@ -418,6 +467,53 @@
       };
       reader.readAsText(file);
     }
+
+    // Theme switcher
+    document.getElementById("themeToggle").addEventListener("click", () => {
+      const html = document.documentElement;
+      const isDark = html.getAttribute("data-bs-theme") === "dark";
+      html.setAttribute("data-bs-theme", isDark ? "light" : "dark");
+      themeToggle.classList.toggle("bi-moon-fill", !isDark);
+      themeToggle.classList.toggle("bi-sun-fill", isDark);
+    });
+
+    // Toggle between Gemini and Ollama
+    async function toggleLLM() {
+      const useOllama = document.getElementById("useOllamaToggle")?.checked;
+
+      const apiKeyContainer = document.getElementById("apiKeyContainer");
+      const modelSelect = document.getElementById("ollamaModelSelect");
+      const geminiBtn = document.getElementById("generateGeminiBtn");
+      const ollamaBtn = document.getElementById("generateOllamaBtn");
+
+      if (apiKeyContainer) apiKeyContainer.classList.toggle("d-none", useOllama);
+      if (modelSelect) modelSelect.classList.toggle("d-none", !useOllama);
+      if (geminiBtn) geminiBtn.classList.toggle("d-none", useOllama);
+      if (ollamaBtn) ollamaBtn.classList.toggle("d-none", !useOllama);
+
+      if (useOllama) await loadOllamaModels();
+    }
+
+
+
+    // Load Ollama models from local API
+    async function loadOllamaModels() {
+      try {
+        const res = await fetch("http://localhost:11434/api/tags");
+        const data = await res.json();
+        const select = document.getElementById("ollamaModelSelect");
+        select.innerHTML = "";
+        data.models.forEach(m => {
+          const opt = document.createElement("option");
+          opt.value = m.name;
+          opt.textContent = m.name;
+          select.appendChild(opt);
+        });
+      } catch (err) {
+        alert("⚠️ Could not fetch Ollama models. Make sure Ollama is running locally.");
+      }
+    }
+
   </script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
